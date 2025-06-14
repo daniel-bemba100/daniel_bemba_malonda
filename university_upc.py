@@ -16,6 +16,8 @@ from PyQt6.QtTextToSpeech import QTextToSpeech
 import os
 import sys
 import json
+import datetime
+
 # Creating main window class
 class MainWindow(QMainWindow):
 
@@ -28,6 +30,20 @@ class MainWindow(QMainWindow):
 
         # creating a QPlainTextEdit object
         self.editor = QPlainTextEdit()
+
+        #setting the editor properties
+
+        font = QFont("Courier New", 20)  # Set a monospaced font for better readability
+        self.editor.setFont(font)
+        self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)  # Wrap text to the widget width
+        self.editor.setPlaceholderText("Start typing here...")
+
+        #initializing the QTextToSpeech object
+        self.speech = QTextToSpeech()
+        self.speech.setLocale(QLocale("en_US"))
+        self.speech.setRate(0.1)  # Set the speech rate
+        self.speech.setVolume(1.0)  # Set the volume
+        self.speech.setPitch(0.9)  # Set the pitch
 
         # self.path holds the path of the currently open file.
         # If none, we haven't got a file open yet (or creating new).
@@ -310,7 +326,7 @@ class MainWindow(QMainWindow):
         dlg.setText(s)
 
         # setting icon to it
-        dlg.setIcon(QMessageBox.Critical)
+        dlg.setIcon(QMessageBox.Icon.Critical)
 
         # showing it
         dlg.show()
@@ -408,6 +424,8 @@ class MainWindow(QMainWindow):
         # creating a QPrintDialog
         dlg = QPrintDialog()
 
+        dlg.setWindowIcon(QIcon("./icon/upc.png") if os.path.exists("./icon/upc.png") else QIcon())
+
         # if executed
         if dlg.exec():
 
@@ -440,32 +458,44 @@ class MainWindow(QMainWindow):
         else:
             pass
     def insert_date(self):
-
         current_date = QDate.currentDate().toString("yyyy-MM-dd")
-        self.editor.appendPlainText(current_date)
+        cursor = self.editor.textCursor()  # Get current cursor position
+        cursor.insertText(current_date)  # Insert at cursor position
+
     def insert_time(self):
         current_time = QTime.currentTime().toString("HH:mm:ss")
-        self.editor.appendPlainText(current_time)
+        cursor = self.editor.textCursor()
+        cursor.insertText(current_time)
+
     def insert_date_time(self):
         current_datetime = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
-        self.editor.appendPlainText(current_datetime)
+        cursor = self.editor.textCursor()
+        cursor.insertText(current_datetime)
+
     def take_screenshot(self):
-        screen = QApplication.primaryScreen()
-        screenshot = screen.grabWindow(0)  # Grabs the entire screen
-        screenshot.save("./screenshots/upc_university.png", "PNG")
-        self.status.showMessage("Screenshot saved as upc_university.png in screenshots folder", 5000)
+        """Takes a screenshot of the primary screen and allows the user to save it."""
+        screenshots_dir = "./screenshots"
+        os.makedirs(screenshots_dir, exist_ok=True) # Ensure directory exists
+
+        # Provide a default filename for convenience
+        default_filename = os.path.join(screenshots_dir, f"screenshot_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Screenshot",
+                                                   default_filename,
+                                                "PNG Image (*.png);JPEG Image (*.jpg);All Files (*.*)")
+        if file_path:
+            screen = QApplication.primaryScreen()
+            # Grabs the entire screen. For just the window, use screen.grabWindow(self.winId())
+            screenshot = screen.grabWindow(0)
+
+            if screenshot.save(file_path):
+                self.status.showMessage(f"Screenshot saved as {os.path.basename(file_path)}", 5000)
+            else:
+                self.status.showMessage("Failed to save screenshot.", 5000)
+
     def read_aloud(self):
         text = self.editor.toPlainText()
         if text:
-            self.speech = QTextToSpeech()
-            self.speech.setLocale(QLocale("en_US"))
-            self.speech.setRate(0.1)  # Set the speech rate
-            self.speech.setVolume(1.0)  # Set the volume
-            self.speech.setPitch(0.9)  # Set the pitch
-            self.speech.setProperty("rate", 0.1)  # Set the speech rate
-            self.speech.setProperty("volume", 1.0)  # Set the volume
-            self.speech.setProperty("pitch", 0.9)  # Set the pitch
-            self.speech.setProperty("voice", self.speech.availableVoices()[0])  # Set the first available voice
             self.speech.say(text)       
 
     def stop_reading(self):
@@ -476,22 +506,27 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'speech'):
             text = self.editor.toPlainText()
             self.speech.say(text)
+    # Toggle between light and dark mode
+    CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 
     def load_theme(self):
         """Loads the theme from the config.json file"""
-        if os.path.exists("config.json"):
-            with open("config.json", "r") as file:
-                config = json.load(file)
-                return config.get("theme", "dark") # Default to dark mode if not set
+        if os.path.exists(self.CONFIG_FILE):
+            try:
+                with open(self.CONFIG_FILE, "r") as file:
+                    config = json.load(file)
+                    return config.get("theme", "dark")  # Default to dark mode if not set
+            except json.JSONDecodeError:
+                return "dark"  # Retour au mode sombre si erreur
         return "dark"
 
     def save_theme(self, theme):
         """Saves the user's selected theme to config.json"""
         config = {"theme": theme}
-        with open("config.json", "w") as file:
-            json.dump(config, file)
+        with open(self.CONFIG_FILE, "w") as file:
+            json.dump(config, file, indent=4)  # Indentation pour lisibilité
 
-    def apply_theme(self):
+    def apply_theme(self, editor):
         """Applies the saved theme on startup"""
         theme = self.load_theme()
         if theme == "dark":
@@ -499,12 +534,12 @@ class MainWindow(QMainWindow):
         else:
             self.editor.setStyleSheet("background-color: white; color: black;")
 
-    def toggle_theme(self):
+    def toggle_theme(self, editor):
         """Switches between dark and light mode"""
         current_theme = self.load_theme()
         new_theme = "light" if current_theme == "dark" else "dark"
         self.save_theme(new_theme)
-        self.apply_theme()
+        self.apply_theme(editor)
 
     def read_selected_text(self):
         selected_text = self.editor.textCursor().selectedText()
@@ -526,9 +561,13 @@ if __name__ == '__main__':
 
     window.showMaximized()
 
-    window.setWindowIcon(QIcon("./icon/upc.png"))
+    if os.path.exists("./icon/upc.png"):
+        icon_path = os.path.join(os.path.dirname(__file__), "./icon/upc.png")
+        window.setWindowIcon(QIcon(icon_path))
+    else:
+        pass
 
     window.setWindowOpacity(1.0)
 
     # loop
-    app.exec()
+    sys.exit(app.exec())  # exit the application
