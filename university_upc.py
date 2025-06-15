@@ -17,6 +17,8 @@ import os
 import sys
 import json
 import datetime
+from gtts import gTTS
+import shutil
 
 # Creating main window class
 class MainWindow(QMainWindow):
@@ -39,11 +41,11 @@ class MainWindow(QMainWindow):
         self.editor.setPlaceholderText("Start typing here...")
 
         #initializing the QTextToSpeech object
-        self.speech = QTextToSpeech()
+        self.speech = QTextToSpeech(self)
         self.speech.setLocale(QLocale("en_US"))
-        self.speech.setRate(0.1)  # Set the speech rate
+        self.speech.setRate(-0.5)  # Set the speech rate
         self.speech.setVolume(1.0)  # Set the volume
-        self.speech.setPitch(0.9)  # Set the pitch
+        self.speech.setPitch(0.1)  # Set the pitch
 
         # self.path holds the path of the currently open file.
         # If none, we haven't got a file open yet (or creating new).
@@ -286,13 +288,21 @@ class MainWindow(QMainWindow):
         audio_toolbar.addAction(restart_reading_action)
         audio_menu.addAction(restart_reading_action)
         # read selected text action
-        read_selected_text_action = QAction("Read Selected", self)
+        read_selected_text_action = QAction("Read`", self)
         read_selected_text_action.setToolTip("Read selected text aloud")
         # when triggered read the selected text aloud
         read_selected_text_action.triggered.connect(self.read_selected_text)
         # adding this to menu and tool bar
         audio_toolbar.addAction(read_selected_text_action)
         audio_menu.addAction(read_selected_text_action)
+        #text to speech action
+        text_to_speech_action = QAction("Convert", self)
+        text_to_speech_action.setToolTip("Convert text to speech")
+        # when triggered convert the text to speech
+        text_to_speech_action.triggered.connect(self.audio_save)
+        # adding this to menu and tool bar
+        audio_toolbar.addAction(text_to_speech_action)
+        audio_menu.addAction(text_to_speech_action)
         # wrap action
         wrap_action = QAction("Wrap text to window", self)
         wrap_action.setStatusTip("Check to wrap text to window")
@@ -477,6 +487,18 @@ class MainWindow(QMainWindow):
         screenshots_dir = "./screenshots"
         os.makedirs(screenshots_dir, exist_ok=True) # Ensure directory exists
 
+        screen = QApplication.primaryScreen()
+            # Grabs the entire screen. For just the window, use screen.grabWindow(self.winId())
+        screenshot = screen.grabWindow(0)
+        if screenshot.isNull():
+            self.status.showMessage("Failed to capture screenshot.", 5000)
+            return
+        # Show a file dialog to save the screenshot
+        # Ensure the screenshots directory exists
+        if not os.path.exists(screenshots_dir):
+            os.makedirs(screenshots_dir)
+        # Use the screenshots directory as the default location
+        # and format the filename with a timestamp              
         # Provide a default filename for convenience
         default_filename = os.path.join(screenshots_dir, f"screenshot_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
 
@@ -484,9 +506,6 @@ class MainWindow(QMainWindow):
                                                    default_filename,
                                                 "PNG Image (*.png);JPEG Image (*.jpg);All Files (*.*)")
         if file_path:
-            screen = QApplication.primaryScreen()
-            # Grabs the entire screen. For just the window, use screen.grabWindow(self.winId())
-            screenshot = screen.grabWindow(0)
 
             if screenshot.save(file_path):
                 self.status.showMessage(f"Screenshot saved as {os.path.basename(file_path)}", 5000)
@@ -544,8 +563,34 @@ class MainWindow(QMainWindow):
     def read_selected_text(self):
         selected_text = self.editor.textCursor().selectedText()
         if selected_text:
-            self.speech = QTextToSpeech()
             self.speech.say(selected_text)
+
+    def convert_text_to_speech(self):
+        """Converts the text in the editor to speech using gTTS"""
+        text = self.editor.toPlainText()
+        if text:
+            try:
+                tts = gTTS(text=text, lang='en')
+                audio_file = "output.mp3"
+                tts.save(audio_file)  # Save the audio file
+                # Optionally, you can play the audio file using QTextToSpeech
+                self.status.showMessage(f"Audio saved as {audio_file}", 5000)
+            except Exception as e:
+                self.dialog_critical(f"Error converting text to speech: {str(e)}")
+        else:
+            self.dialog_critical("No text to convert to speech.")
+
+    def audio_save(self):
+        """Converts the text in the editor to speech and saves it as an audio file"""
+        self.convert_text_to_speech()
+        """Saves the audio file to a specified location"""
+        audio_file, _ = QFileDialog.getSaveFileName(self, "Save Audio", "", "MP3 Files (*.mp3);All Files (*)")
+        if audio_file:
+            try:
+                shutil.copy("output.mp3", audio_file)  # Copy the saved audio file to the new location
+                self.status.showMessage(f"Audio saved as {os.path.basename(audio_file)}", 5000)
+            except Exception as e:
+                self.dialog_critical(f"Error saving audio: {str(e)}")
 
 # drivers code
 if __name__ == '__main__':
@@ -554,7 +599,7 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
 
     # setting application name
-    app.setApplicationName("PyQt6-Note")
+    app.setApplicationName("PyQt6-Notepad")
 
     # creating a main window object
     window = MainWindow()
@@ -569,5 +614,7 @@ if __name__ == '__main__':
 
     window.setWindowOpacity(1.0)
 
-    # loop
+    # Load the theme from config.json
+    window.apply_theme(window.editor)  # Apply the theme to the editor
+
     sys.exit(app.exec())  # exit the application
