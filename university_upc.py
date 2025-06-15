@@ -42,10 +42,13 @@ class MainWindow(QMainWindow):
 
         #initializing the QTextToSpeech object
         self.speech = QTextToSpeech(self)
-        self.speech.setLocale(QLocale("en_US"))
-        self.speech.setRate(-0.5)  # Set the speech rate
+        self.speech.setLocale(QLocale("en_GB"))
+        self.speech.setRate(-0.25)  # Set the speech rate
         self.speech.setVolume(1.0)  # Set the volume
-        self.speech.setPitch(0.1)  # Set the pitch
+        self.speech.setPitch(0.0)  # Set the pitch
+        voice = self.speech.availableVoices()[13] if self.speech.availableVoices() else None
+        if voice:
+            self.speech.setVoice(voice)
 
         # self.path holds the path of the currently open file.
         # If none, we haven't got a file open yet (or creating new).
@@ -513,9 +516,11 @@ class MainWindow(QMainWindow):
                 self.status.showMessage("Failed to save screenshot.", 5000)
 
     def read_aloud(self):
-        text = self.editor.toPlainText()
+        text = self.editor.toPlainText().strip()  # Get the text from the editor and strip leading/trailing whitespace
         if text:
-            self.speech.say(text)       
+            self.speech.say(text)  # Read the text aloud
+        else:
+            self.dialog_critical("No text to read aloud.")
 
     def stop_reading(self):
         if hasattr(self, 'speech'):
@@ -523,7 +528,7 @@ class MainWindow(QMainWindow):
 
     def restart_reading(self):
         if hasattr(self, 'speech'):
-            text = self.editor.toPlainText()
+            text = self.editor.toPlainText().strip()  # Get the text from the editor and strip leading/trailing whitespace
             self.speech.say(text)
     # Toggle between light and dark mode
     CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
