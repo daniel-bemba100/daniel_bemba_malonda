@@ -1,0 +1,208 @@
+/* UPC Notepad — Light Theme */
+
+QMainWindow {
+    background-color: #ffffff;
+    color: #1e1e1e;
+}
+
+/* ── Menu Bar ────────────────────────────────────── */
+QMenuBar {
+    background-color: #f3f3f3;
+    color: #333333;
+    border-bottom: 1px solid #d4d4d4;
+    padding: 2px 0;
+    font-size: 13px;
+}
+QMenuBar::item {
+    padding: 6px 12px;
+    border-radius: 4px;
+}
+QMenuBar::item:selected {
+    background-color: #e0e0e0;
+}
+QMenu {
+    background-color: #f8f8f8;
+    color: #333333;
+    border: 1px solid #d4d4d4;
+    border-radius: 6px;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 6px 28px 6px 20px;
+    border-radius: 4px;
+}
+QMenu::item:selected {
+    background-color: #0078d4;
+    color: #ffffff;
+}
+QMenu::separator {
+    height: 1px;
+    background-color: #d4d4d4;
+    margin: 4px 8px;
+}
+
+/* ── Toolbars ────────────────────────────────────── */
+QToolBar {
+    background-color: #f3f3f3;
+    border: none;
+    border-bottom: 1px solid #d4d4d4;
+    padding: 3px;
+    spacing: 3px;
+}
+QToolBar QToolButton {
+    background-color: transparent;
+    color: #333333;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 12px;
+}
+QToolBar QToolButton:hover {
+    background-color: #e0e0e0;
+    border-color: #c8c8c8;
+}
+QToolBar QToolButton:pressed {
+    background-color: #0078d4;
+    color: #ffffff;
+}
+
+/* ── Tab Widget ──────────────────────────────────── */
+QTabWidget::pane {
+    border: none;
+    background-color: #ffffff;
+}
+QTabBar {
+    background-color: #f3f3f3;
+}
+QTabBar::tab {
+    background-color: #ececec;
+    color: #6e6e6e;
+    border: none;
+    padding: 8px 20px;
+    margin-right: 1px;
+    font-size: 13px;
+}
+QTabBar::tab:selected {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    border-top: 2px solid #0078d4;
+}
+QTabBar::tab:hover:!selected {
+    background-color: #e0e0e0;
+}
+
+/* ── Editor ──────────────────────────────────────── */
+QPlainTextEdit {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    border: none;
+    selection-background-color: #add6ff;
+    selection-color: #1e1e1e;
+}
+
+/* ── Status Bar ──────────────────────────────────── */
+QStatusBar {
+    background-color: #0078d4;
+    color: #ffffff;
+    font-size: 12px;
+    border: none;
+    min-height: 24px;
+}
+QStatusBar QLabel {
+    color: #ffffff;
+    padding: 0 8px;
+}
+
+/* ── Find/Replace Bar ────────────────────────────── */
+QWidget#findReplaceBar {
+    background-color: #f3f3f3;
+    border-top: 1px solid #d4d4d4;
+}
+QLineEdit {
+    background-color: #ffffff;
+    color: #1e1e1e;
+    border: 1px solid #c8c8c8;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 13px;
+    selection-background-color: #add6ff;
+}
+QLineEdit:focus {
+    border-color: #0078d4;
+}
+QPushButton {
+    background-color: #e0e0e0;
+    color: #333333;
+    border: 1px solid #c8c8c8;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 12px;
+}
+QPushButton:hover {
+    background-color: #d0d0d0;
+}
+QPushButton:pressed {
+    background-color: #0078d4;
+    color: #ffffff;
+}
+QCheckBox {
+    color: #333333;
+    spacing: 4px;
+}
+QLabel {
+    color: #333333;
+    font-size: 13px;
+}
+
+/* ── Scrollbars ──────────────────────────────────── */
+QScrollBar:vertical {
+    background-color: #f3f3f3;
+    width: 12px;
+    border: none;
+}
+QScrollBar::handle:vertical {
+    background-color: #c1c1c1;
+    border-radius: 6px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover {
+    background-color: #a0a0a0;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+QScrollBar:horizontal {
+    background-color: #f3f3f3;
+    height: 12px;
+    border: none;
+}
+QScrollBar::handle:horizontal {
+    background-color: #c1c1c1;
+    border-radius: 6px;
+    min-width: 30px;
+}
+QScrollBar::handle:horizontal:hover {
+    background-color: #a0a0a0;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+/* ── Dialogs ─────────────────────────────────────── */
+QMessageBox {
+    background-color: #f8f8f8;
+    color: #1e1e1e;
+}
+QInputDialog {
+    background-color: #f8f8f8;
+    color: #1e1e1e;
+}
+
+/* ── Tooltips ────────────────────────────────────── */
+QToolTip {
+    background-color: #f8f8f8;
+    color: #333333;
+    border: 1px solid #d4d4d4;
+    padding: 4px;
+    font-size: 12px;
+}
