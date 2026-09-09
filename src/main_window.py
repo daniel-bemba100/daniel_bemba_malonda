@@ -4,7 +4,7 @@ import logging
 import os
 
 from PyQt6.QtCore import QDate, QDateTime, QTime, Qt, QTimer
-from PyQt6.QtGui import QAction, QIcon, QKeySequence
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PyQt6.QtPrintSupport import QPrintDialog
 from PyQt6.QtWidgets import (
     QApplication, QFileDialog, QInputDialog, QMainWindow,
@@ -32,7 +32,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._settings = settings
         self._theme_mgr = ThemeManager(settings)
-        self._tts = TTSEngine(self)
+        self._tts = TTSEngine(self, settings=settings)
 
         self._setup_window()
         self._setup_central_widget()
@@ -272,6 +272,43 @@ class MainWindow(QMainWindow):
             menu.addAction(action)
             toolbar.addAction(action)
 
+        # ── Voice Gender submenu ──────────────────────────────
+        menu.addSeparator()
+        voice_menu = menu.addMenu("🎤 Voice")
+        voice_group = QActionGroup(self)
+        voice_group.setExclusive(True)
+
+        current_gender = self._tts.voice_gender
+
+        female_action = QAction("♀  Female Voice", self)
+        female_action.setCheckable(True)
+        female_action.setChecked(current_gender == "female")
+        female_action.setData("female")
+        voice_group.addAction(female_action)
+        voice_menu.addAction(female_action)
+
+        male_action = QAction("♂  Male Voice", self)
+        male_action.setCheckable(True)
+        male_action.setChecked(current_gender == "male")
+        male_action.setData("male")
+        voice_group.addAction(male_action)
+        voice_menu.addAction(male_action)
+
+        voice_group.triggered.connect(self._on_voice_gender_changed)
+
+        # Add voice indicator to toolbar
+        voice_label = QAction(
+            f"🎤 {'♀' if current_gender == 'female' else '♂'}", self,
+        )
+        voice_label.setToolTip(
+            f"Voice: {current_gender.title()}"
+        )
+        voice_label.setEnabled(False)
+        toolbar.addSeparator()
+        toolbar.addAction(voice_label)
+        self._voice_toolbar_label = voice_label
+        self._voice_action_group = voice_group
+
     # ══════════════════════════════════════════════════════════
     #  FILE ACTIONS
     # ══════════════════════════════════════════════════════════
@@ -472,6 +509,15 @@ class MainWindow(QMainWindow):
                 self._tts.export_to_mp3(e.toPlainText())
             except Exception as ex:
                 QMessageBox.critical(self, "Export Error", str(ex))
+
+    def _on_voice_gender_changed(self, action: QAction) -> None:
+        """Handle voice gender radio-button change from the Audio menu."""
+        gender = action.data()
+        self._tts.voice_gender = gender
+        symbol = "♀" if gender == "female" else "♂"
+        self._voice_toolbar_label.setText(f"🎤 {symbol}")
+        self._voice_toolbar_label.setToolTip(f"Voice: {gender.title()}")
+        self._status.flash_message(f"Voice: {gender.title()} {symbol}")
 
     # ══════════════════════════════════════════════════════════
     #  STATUS BAR UPDATES

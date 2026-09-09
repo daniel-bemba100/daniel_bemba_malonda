@@ -9,6 +9,8 @@ setup(
     install_requires=[
         "PyQt6>=6.6.0",
         "gTTS>=2.5.0",
+        "pyttsx3>=2.90",
+        "edge-tts>=7.0.0",
     ],
     entry_points={
         "console_scripts": [

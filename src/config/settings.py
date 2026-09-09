@@ -28,6 +28,7 @@ class SettingsManager:
         "tts_locale": AppConstants.TTS_LOCALE,
         "tts_rate": AppConstants.TTS_RATE,
         "tts_volume": AppConstants.TTS_VOLUME,
+        "tts_voice_gender": AppConstants.TTS_VOICE_GENDER,
     }
 
     def __init__(self, db_manager: DatabaseManager = None):

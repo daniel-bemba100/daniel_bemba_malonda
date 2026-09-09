@@ -45,6 +45,8 @@ class AppConstants:
     TTS_RATE = -0.25
     TTS_VOLUME = 1.0
     TTS_PITCH = 0.0
+    TTS_VOICE_GENDER = "female"
+    TTS_VOICE_GENDERS = ("female", "male")
 
     # Theme
     DEFAULT_THEME = "dark"

@@ -14,8 +14,10 @@ A fully-featured, modular text editor built with **PyQt6**. It has been moderniz
   - **Snippets Manager:** Save bits of code or text directly into the local database and load them anytime in a new tab.
   - **Persistent Settings:** Safely stores your preferences (theme, recent files, window size).
 - **Text-to-Speech & MP3 Export:** 
-  - Reads text aloud with automatic fallback to `pyttsx3` if system TTS is unavailable.
-  - Asynchronous background MP3 export using `gTTS` with a live progress bar.
+  - Reads text aloud with natural phrasing and pacing, using premium **Microsoft Edge Neural Voices** (`edge-tts`).
+  - Supports gender selection (Male/Female) with highly realistic intonations.
+  - Asynchronous background MP3 export using `edge-tts` (or `gTTS` fallback) with a live progress bar.
+  - Automatic fallback to `gTTS`, `espeak`, or `pyttsx3` if offline or the primary engine is unavailable.
 - **Professional Editor Tools:**
   - Line Numbers & Current Line Highlighting.
   - Non-modal, inline Find & Replace bar (Case-Sensitive, Whole-Word).

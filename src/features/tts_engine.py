@@ -9,6 +9,13 @@ Architecture:
  - Sentences are spoken one-by-one so:
      • Each sentence is clear with natural inter-sentence pauses.
      • The stop button works instantly (kill the ffplay/espeak subprocess).
+
+Voice Gender:
+ - Female: Edge TTS en-US-JennyNeural (or gTTS default).
+ - Male:   Edge TTS en-US-GuyNeural (or gTTS pitch-shifted).
+           espeak uses native male voice variant (-v en-us+m3).
+           pyttsx3 selects a male voice from the system voice list.
+ - Preference is persisted in the SQLite database via SettingsManager.
 """
 
 import logging
@@ -42,15 +49,17 @@ _PAUSE_SYMBOLS = re.compile(r'[;:\-–—/\\|]')
 _STRIP_SYMBOLS = re.compile(r'[#*&@^~`<>{}()\[\]""''\u200b\u00a0]')
 
 # Quotes that are NOT contractions (standalone or around words)
-_STANDALONE_QUOTES = re.compile(r"(?<!\w)['\"]|['\"](?!\w)")
+_STANDALONE_QUOTES = re.compile(r"(?<!\w)['\"']|['\"'](?!\w)")
 
-# Collapse multiple whitespace / newlines into a single space.
-_WHITESPACE = re.compile(r'\s+')
+# Collapse multiple horizontal whitespace into a single space.
+_HORIZONTAL_SPACE = re.compile(r'[ \t]+')
+
+# Normalize multiple newlines
+_NEWLINES = re.compile(r'\n+')
 
 # Detect sentence boundaries (period, question mark, exclamation mark
-# optionally followed by closing quotes or parentheses, then whitespace
-# or end-of-string).
-_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+')
+# optionally followed by whitespace, OR a newline).
+_SENTENCE_SPLIT = re.compile(r'(?<=[.!?])\s+|\n')
 
 # Numbered / bulleted list items: "1.", "2)", "a.", "-", "•"
 _LIST_MARKER = re.compile(r'^\s*(?:\d+[.)]\s*|[a-zA-Z][.)]\s*|[-•]\s*)')
@@ -59,7 +68,7 @@ _LIST_MARKER = re.compile(r'^\s*(?:\d+[.)]\s*|[a-zA-Z][.)]\s*|[-•]\s*)')
 _ELLIPSIS = re.compile(r'\.{2,}')
 
 # Repeated punctuation (e.g. "!!!" -> "!")
-_REPEATED_PUNCT = re.compile(r'([!?.])\1+')
+_REPEATED_PUNCT = re.compile(r'([!?.])\\1+')
 
 # URLs
 _URL = re.compile(r'https?://\S+|www\.\S+', re.IGNORECASE)
@@ -91,13 +100,14 @@ def preprocess_text(text: str) -> str:
     # Reduce repeated punctuation
     text = _REPEATED_PUNCT.sub(r'\1', text)
 
-    # Remove list markers
+    # Remove list markers and strip trailing spaces from each line
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
         line = _LIST_MARKER.sub('', line)
-        cleaned_lines.append(line)
-    text = ' '.join(cleaned_lines)
+        cleaned_lines.append(line.strip())
+    # Join with newlines to preserve line breaks
+    text = '\n'.join(cleaned_lines)
 
     # Replace pause-worthy symbols with a comma (the engine will pause)
     text = _PAUSE_SYMBOLS.sub(',', text)
@@ -108,13 +118,16 @@ def preprocess_text(text: str) -> str:
     # Remove quotes that are NOT contractions (e.g. "hello" but keep they're)
     text = _STANDALONE_QUOTES.sub(' ', text)
 
-    # Collapse whitespace
-    text = _WHITESPACE.sub(' ', text).strip()
+    # Collapse horizontal whitespace
+    text = _HORIZONTAL_SPACE.sub(' ', text)
+    
+    # Collapse multiple newlines and strip
+    text = _NEWLINES.sub('\n', text).strip()
 
-    # Clean up comma-space runs produced by replacements (",,," -> ",")
+    # Clean up comma-space runs produced by replacements (",,,," -> ",")
     text = re.sub(r',(\s*,)+', ',', text)
-    # Remove leading/trailing commas from sentences
-    text = re.sub(r'(^|[.!?]\s*),\s*', r'\1', text)
+    # Remove leading/trailing commas from sentences or newlines
+    text = re.sub(r'(^|[.!?\n]\s*),\s*', r'\1', text)
 
     return text
 
@@ -134,16 +147,27 @@ class TTSEngine:
     """Encapsulates all text-to-speech functionality.
 
     Preferred backend order:
-      1. gTTS + ffplay      (Google neural voice — professional quality)
+      1. Edge TTS + ffplay  (Microsoft neural voices — premium quality)
+      2. gTTS + ffplay      (Google neural voice — professional quality)
       2. espeak subprocess   (offline fallback)
+
+    Voice gender is persisted via *settings* (SQLite-backed).
     """
 
-    def __init__(self, parent: QWidget) -> None:
+    def __init__(self, parent: QWidget, settings=None) -> None:
         self._parent = parent
+        self._settings = settings
         self._engine_name = "none"
         self._read_worker: Optional[QThread] = None
 
         # Check available backends in order of quality
+        has_edge_tts = False
+        try:
+            import edge_tts  # noqa: F401
+            has_edge_tts = True
+        except ImportError:
+            pass
+
         has_gtts = False
         try:
             from gtts import gTTS  # noqa: F401
@@ -152,9 +176,14 @@ class TTSEngine:
             pass
 
         ffplay_path = shutil.which("ffplay")
+        self._ffmpeg_path = shutil.which("ffmpeg") or ""
         espeak_path = shutil.which("espeak-ng") or shutil.which("espeak")
 
-        if has_gtts and ffplay_path:
+        if has_edge_tts and ffplay_path:
+            self._engine_name = "edge-tts"
+            self._ffplay_path = ffplay_path
+            logger.info("Using Edge TTS engine (professional neural voices)")
+        elif has_gtts and ffplay_path:
             self._engine_name = "gtts"
             self._ffplay_path = ffplay_path
             logger.info("Using Google TTS engine (gTTS + ffplay)")
@@ -173,13 +202,38 @@ class TTSEngine:
         # Keep espeak path for offline fallback even if gTTS is primary
         self._espeak_path = espeak_path or ""
 
+    # ── Voice Gender ─────────────────────────────────────────
+
+    @property
+    def voice_gender(self) -> str:
+        """Return the current voice gender ('female' or 'male')."""
+        if self._settings:
+            return self._settings.get(
+                "tts_voice_gender", AppConstants.TTS_VOICE_GENDER,
+            )
+        return AppConstants.TTS_VOICE_GENDER
+
+    @voice_gender.setter
+    def voice_gender(self, gender: str) -> None:
+        """Set voice gender and persist to database immediately."""
+        gender = gender.lower()
+        if gender not in AppConstants.TTS_VOICE_GENDERS:
+            logger.warning("Invalid voice gender '%s', ignoring.", gender)
+            return
+        if self._settings:
+            self._settings.set("tts_voice_gender", gender)
+        logger.info("Voice gender set to '%s'", gender)
+
+    # ── Speaking ─────────────────────────────────────────────
+
     def say(self, text: str) -> None:
         """Speak *text* aloud in a background thread."""
         if self._engine_name == "none":
             QMessageBox.warning(
                 self._parent, "TTS Unavailable",
-                "No Text-to-Speech engine is installed on this system.\n"
-                "Install gTTS: pip install gTTS\n"
+                "No Text-to-Speech engine is installed on this system.\\n"
+                "Install edge-tts: pip install edge-tts\\n"
+                "Or gTTS: pip install gTTS\\n"
                 "Or espeak-ng: sudo apt install espeak-ng",
             )
             return
@@ -199,16 +253,26 @@ class TTSEngine:
         if not sentences:
             return
 
-        if self._engine_name == "gtts":
+        gender = self.voice_gender
+
+        if self._engine_name == "edge-tts":
+            self._read_worker = EdgeTTSReadWorker(
+                sentences, self._ffplay_path, self._espeak_path,
+                voice_gender=gender,
+            )
+        elif self._engine_name == "gtts":
             self._read_worker = GoogleTTSReadWorker(
                 sentences, self._ffplay_path, self._espeak_path,
+                voice_gender=gender, ffmpeg_path=self._ffmpeg_path,
             )
         elif self._engine_name == "espeak":
             self._read_worker = EspeakReadWorker(
-                sentences, self._espeak_path,
+                sentences, self._espeak_path, voice_gender=gender,
             )
         else:
-            self._read_worker = Pyttsx3ReadWorker(sentences)
+            self._read_worker = Pyttsx3ReadWorker(
+                sentences, voice_gender=gender,
+            )
 
         self._read_worker.start()
 
@@ -234,13 +298,12 @@ class TTSEngine:
             QMessageBox.warning(self._parent, "Export", "No text to convert.")
             return
 
-        try:
-            from gtts import gTTS  # noqa: F401
-        except ImportError:
-            logger.error("gTTS not installed — cannot export audio")
+        # We need either edge-tts or gTTS
+        if self._engine_name not in ("edge-tts", "gtts"):
+            logger.error("No high-quality TTS engine installed — cannot export audio")
             QMessageBox.critical(
                 self._parent, "Export Error",
-                "gTTS is not installed. Please run 'pip install gTTS'.",
+                "Please run 'pip install edge-tts' or 'pip install gTTS'.",
             )
             return
 
@@ -264,7 +327,16 @@ class TTSEngine:
         self._progress.setValue(0)
         self._progress.show()
 
-        self._export_worker = TTSExportWorker(text, save_path)
+        gender = self.voice_gender
+        if self._engine_name == "edge-tts":
+            self._export_worker = EdgeTTSExportWorker(
+                text, save_path, voice_gender=gender,
+            )
+        else:
+            self._export_worker = TTSExportWorker(
+                text, save_path,
+                voice_gender=gender, ffmpeg_path=self._ffmpeg_path,
+            )
         self._export_worker.progress.connect(self._progress.setValue)
         self._export_worker.finished.connect(self._on_export_finished)
         self._export_worker.error.connect(self._on_export_error)
@@ -292,6 +364,298 @@ class TTSEngine:
 
 
 # ──────────────────────────────────────────────────────────────
+#  Pitch-Shift Helper  (used for male voice)
+# ──────────────────────────────────────────────────────────────
+
+def _pitch_shift_mp3(input_path: str, output_path: str,
+                     ffmpeg_path: str, factor: float = 0.85) -> bool:
+    """Shift pitch of *input_path* by *factor* and write to *output_path*.
+
+    A factor < 1.0 lowers the pitch (male voice effect).
+    Returns True on success.
+    """
+    if not ffmpeg_path:
+        return False
+    try:
+        cmd = [
+            ffmpeg_path, '-y', '-i', input_path,
+            '-af', f'asetrate=44100*{factor},aresample=44100,atempo={1/factor}',
+            '-q:a', '2',
+            output_path,
+        ]
+        result = subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logger.warning("Pitch-shift failed: %s", e)
+        return False
+
+
+
+# ──────────────────────────────────────────────────────────────
+#  Edge TTS Read Worker  (premium neural voices)
+# ──────────────────────────────────────────────────────────────
+
+class EdgeTTSReadWorker(QThread):
+    """Reads sentences using Microsoft Edge TTS (edge-tts) + ffplay.
+
+    For each sentence:
+      1. edge-tts CLI generates an MP3 in a temp file.
+      2. ffplay plays it back.
+      3. Temp file is cleaned up immediately after playback.
+    """
+
+    def __init__(self, sentences: list[str], ffplay_path: str,
+                 espeak_fallback_path: str = "",
+                 voice_gender: str = "female"):
+        super().__init__()
+        self._sentences = sentences
+        self._ffplay_path = ffplay_path
+        self._espeak_fallback = espeak_fallback_path
+        self._voice_gender = voice_gender
+        self._stop_requested = False
+        self._process = None
+        self._mutex = QMutex()
+        self._temp_files: list[str] = []
+        import sys
+        self._python_exe = sys.executable
+
+    def request_stop(self) -> None:
+        self._stop_requested = True
+        with QMutexLocker(self._mutex):
+            if self._process is not None:
+                try:
+                    os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    try:
+                        self._process.kill()
+                    except Exception:
+                        pass
+        self._cleanup_temp_files()
+
+    def _cleanup_temp_files(self) -> None:
+        for f in self._temp_files:
+            try:
+                if os.path.exists(f):
+                    os.unlink(f)
+            except OSError:
+                pass
+        self._temp_files.clear()
+
+    def run(self) -> None:
+        try:
+            import edge_tts
+        except ImportError:
+            logger.error("edge_tts not available for reading")
+            return
+
+        voice = "en-US-GuyNeural" if self._voice_gender == "male" else "en-US-JennyNeural"
+
+        try:
+            for sentence in self._sentences:
+                if self._stop_requested:
+                    break
+
+                tmp_file = None
+                try:
+                    tmp_fd, tmp_path = tempfile.mkstemp(
+                        suffix='.mp3', prefix='tts_edge_'
+                    )
+                    os.close(tmp_fd)
+                    tmp_file = tmp_path
+                    self._temp_files.append(tmp_path)
+
+                    if self._stop_requested:
+                        break
+
+                    # Generate MP3 using edge-tts module CLI via subprocess
+                    cmd_tts = [
+                        self._python_exe, "-m", "edge_tts",
+                        "--voice", voice,
+                        "--text", sentence,
+                        "--write-media", tmp_path
+                    ]
+                    
+                    with QMutexLocker(self._mutex):
+                        if self._stop_requested:
+                            break
+                        self._process = subprocess.Popen(
+                            cmd_tts,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            preexec_fn=os.setsid,
+                        )
+
+                    self._process.wait()
+
+                    with QMutexLocker(self._mutex):
+                        self._process = None
+
+                    if self._stop_requested:
+                        break
+                        
+                    # Play the MP3 with ffplay
+                    cmd_play = [
+                        self._ffplay_path,
+                        '-nodisp',      # No video window
+                        '-autoexit',    # Exit when done
+                        '-loglevel', 'quiet',  # No console output
+                        tmp_path,
+                    ]
+
+                    with QMutexLocker(self._mutex):
+                        if self._stop_requested:
+                            break
+                        self._process = subprocess.Popen(
+                            cmd_play,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            preexec_fn=os.setsid,
+                        )
+
+                    self._process.wait()
+
+                    with QMutexLocker(self._mutex):
+                        self._process = None
+
+                except Exception as e:
+                    if self._stop_requested:
+                        break
+                    logger.warning(
+                        "edge-tts failed for sentence, falling back to espeak: %s",
+                        e,
+                    )
+                    if self._espeak_fallback:
+                        self._speak_espeak(sentence)
+                finally:
+                    if tmp_file and os.path.exists(tmp_file):
+                        try:
+                            os.unlink(tmp_file)
+                            if tmp_file in self._temp_files:
+                                self._temp_files.remove(tmp_file)
+                        except OSError:
+                            pass
+
+                if self._stop_requested:
+                    break
+
+                # Dynamic pause duration based on punctuation to sound more natural/expressive
+                pause_duration = 0.25  # default for plain newlines
+                if sentence.endswith(('.', '!', '?')):
+                    pause_duration = 0.5
+                elif sentence.endswith(','):
+                    pause_duration = 0.15
+                    
+                time.sleep(pause_duration)
+
+        except Exception as e:
+            if not self._stop_requested:
+                logger.error("EdgeTTSReadWorker error: %s", e)
+        finally:
+            self._cleanup_temp_files()
+
+    def _speak_espeak(self, sentence: str) -> None:
+        if not self._espeak_fallback or self._stop_requested:
+            return
+        voice = 'en-us+m3' if self._voice_gender == 'male' else 'en-us+f3'
+        cmd = [
+            self._espeak_fallback,
+            '-v', voice, '-s', '145', '-p', '45',
+            '-a', '95', '-g', '8', '--', sentence,
+        ]
+        with QMutexLocker(self._mutex):
+            if self._stop_requested:
+                return
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid,
+            )
+        self._process.wait()
+        with QMutexLocker(self._mutex):
+            self._process = None
+
+class EdgeTTSExportWorker(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(str)
+    error = pyqtSignal(str)
+
+    def __init__(self, text: str, save_path: str,
+                 voice_gender: str = "female"):
+        super().__init__()
+        self.text = text
+        self.save_path = save_path
+        self._voice_gender = voice_gender
+        self._is_cancelled = False
+        import sys
+        self._python_exe = sys.executable
+        self._process = None
+
+    def cancel(self):
+        self._is_cancelled = True
+        if self._process is not None:
+            try:
+                os.killpg(os.getpgid(self._process.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+
+    def run(self):
+        try:
+            cleaned = preprocess_text(self.text)
+            if not cleaned.strip():
+                self.error.emit("No valid text to convert.")
+                return
+
+            voice = "en-US-GuyNeural" if self._voice_gender == "male" else "en-US-JennyNeural"
+            
+            # Since edge-tts CLI takes text directly, we use it directly to write the media file
+            self.progress.emit(10)
+            
+            cmd_tts = [
+                self._python_exe, "-m", "edge_tts",
+                "--voice", voice,
+                "--text", cleaned,
+                "--write-media", self.save_path
+            ]
+            
+            if self._is_cancelled:
+                return
+                
+            self._process = subprocess.Popen(
+                cmd_tts,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid,
+            )
+            
+            # Wait and fake progress
+            while self._process.poll() is None:
+                if self._is_cancelled:
+                    return
+                time.sleep(0.5)
+                
+            if self._is_cancelled:
+                return
+                
+            if self._process.returncode == 0:
+                self.progress.emit(100)
+                self.finished.emit(self.save_path)
+            else:
+                self.error.emit(f"edge-tts failed with exit code {self._process.returncode}")
+
+        except Exception as e:
+            self.error.emit(str(e))
+        finally:
+            self._process = None
+
+
+# ──────────────────────────────────────────────────────────────
 #  Google TTS Read Worker  (primary — professional quality)
 # ──────────────────────────────────────────────────────────────
 
@@ -300,8 +664,9 @@ class GoogleTTSReadWorker(QThread):
 
     For each sentence:
       1. gTTS generates an MP3 in a temp file.
-      2. ffplay plays it back (no window, quiet mode).
-      3. Temp file is cleaned up immediately after playback.
+      2. (If male) ffmpeg pitch-shifts the MP3 to a lower register.
+      3. ffplay plays it back (no window, quiet mode).
+      4. Temp file is cleaned up immediately after playback.
 
     Benefits:
       • Same professional Google neural voice as the export feature.
@@ -311,11 +676,15 @@ class GoogleTTSReadWorker(QThread):
     """
 
     def __init__(self, sentences: list[str], ffplay_path: str,
-                 espeak_fallback_path: str = ""):
+                 espeak_fallback_path: str = "",
+                 voice_gender: str = "female",
+                 ffmpeg_path: str = ""):
         super().__init__()
         self._sentences = sentences
         self._ffplay_path = ffplay_path
         self._espeak_fallback = espeak_fallback_path
+        self._voice_gender = voice_gender
+        self._ffmpeg_path = ffmpeg_path
         self._stop_requested = False
         self._process: Optional[subprocess.Popen] = None
         self._mutex = QMutex()
@@ -376,13 +745,35 @@ class GoogleTTSReadWorker(QThread):
                     if self._stop_requested:
                         break
 
+                    # Pitch-shift for male voice
+                    play_path = tmp_path
+                    if self._voice_gender == "male" and self._ffmpeg_path:
+                        shifted_fd, shifted_path = tempfile.mkstemp(
+                            suffix='.mp3', prefix='tts_male_'
+                        )
+                        os.close(shifted_fd)
+                        self._temp_files.append(shifted_path)
+
+                        if _pitch_shift_mp3(
+                            tmp_path, shifted_path, self._ffmpeg_path,
+                        ):
+                            play_path = shifted_path
+                        else:
+                            # Pitch-shift failed — play unshifted
+                            logger.warning(
+                                "Male pitch-shift failed, using default voice"
+                            )
+
+                    if self._stop_requested:
+                        break
+
                     # Play the MP3 with ffplay
                     cmd = [
                         self._ffplay_path,
                         '-nodisp',      # No video window
                         '-autoexit',    # Exit when done
                         '-loglevel', 'quiet',  # No console output
-                        tmp_path,
+                        play_path,
                     ]
 
                     with QMutexLocker(self._mutex):
@@ -423,8 +814,14 @@ class GoogleTTSReadWorker(QThread):
                 if self._stop_requested:
                     break
 
-                # Brief inter-sentence pause for natural rhythm
-                time.sleep(0.15)
+                # Dynamic pause duration based on punctuation
+                pause_duration = 0.25
+                if sentence.endswith(('.', '!', '?')):
+                    pause_duration = 0.5
+                elif sentence.endswith(','):
+                    pause_duration = 0.15
+                    
+                time.sleep(pause_duration)
 
         except Exception as e:
             if not self._stop_requested:
@@ -436,9 +833,11 @@ class GoogleTTSReadWorker(QThread):
         """Fallback: speak a single sentence via espeak."""
         if not self._espeak_fallback or self._stop_requested:
             return
+        # Use gender-appropriate voice variant
+        voice = 'en-us+m3' if self._voice_gender == 'male' else 'en-us+f3'
         cmd = [
             self._espeak_fallback,
-            '-v', 'en-us', '-s', '145', '-p', '45',
+            '-v', voice, '-s', '145', '-p', '45',
             '-a', '95', '-g', '8', '--', sentence,
         ]
         with QMutexLocker(self._mutex):
@@ -465,10 +864,12 @@ class EspeakReadWorker(QThread):
     Used as offline fallback when gTTS/ffplay are not available.
     """
 
-    def __init__(self, sentences: list[str], espeak_path: str):
+    def __init__(self, sentences: list[str], espeak_path: str,
+                 voice_gender: str = "female"):
         super().__init__()
         self._sentences = sentences
         self._espeak_path = espeak_path
+        self._voice_gender = voice_gender
         self._stop_requested = False
         self._process: Optional[subprocess.Popen] = None
         self._mutex = QMutex()
@@ -486,6 +887,8 @@ class EspeakReadWorker(QThread):
                         pass
 
     def run(self) -> None:
+        # Use gender-appropriate voice variant
+        voice = 'en-us+m3' if self._voice_gender == 'male' else 'en-us+f3'
         try:
             for sentence in self._sentences:
                 if self._stop_requested:
@@ -493,7 +896,7 @@ class EspeakReadWorker(QThread):
 
                 cmd = [
                     self._espeak_path,
-                    '-v', 'en-us',
+                    '-v', voice,
                     '-s', '145',
                     '-p', '45',
                     '-a', '95',
@@ -535,9 +938,11 @@ class EspeakReadWorker(QThread):
 class Pyttsx3ReadWorker(QThread):
     """Reads sentences using pyttsx3, one at a time for stoppability."""
 
-    def __init__(self, sentences: list[str]):
+    def __init__(self, sentences: list[str],
+                 voice_gender: str = "female"):
         super().__init__()
         self._sentences = sentences
+        self._voice_gender = voice_gender
         self._stop_requested = False
         self._engine = None
 
@@ -558,13 +963,41 @@ class Pyttsx3ReadWorker(QThread):
             self._engine.setProperty('rate', 140)
             self._engine.setProperty('volume', 0.95)
 
-            # Find an American English voice
+            # Find a voice matching the requested gender
             voices = self._engine.getProperty('voices')
+            target_gender = self._voice_gender.lower()
+            selected_voice = None
+
+            # First pass: find a voice matching both gender and en-us locale
             for voice in voices:
                 vid = voice.id.lower()
-                if 'en-us' in vid or 'en_us' in vid:
-                    self._engine.setProperty('voice', voice.id)
+                name = voice.name.lower() if voice.name else ""
+                is_english = ('en-us' in vid or 'en_us' in vid
+                              or 'english' in name)
+                is_male = ('male' in name or '+m' in vid
+                           or 'guy' in name or 'david' in name)
+                is_female = ('female' in name or '+f' in vid
+                             or 'zira' in name or 'jenny' in name)
+
+                if not is_english:
+                    continue
+                if target_gender == 'male' and is_male:
+                    selected_voice = voice
                     break
+                if target_gender == 'female' and is_female:
+                    selected_voice = voice
+                    break
+
+            # Second pass: fallback to any English voice
+            if selected_voice is None:
+                for voice in voices:
+                    vid = voice.id.lower()
+                    if 'en-us' in vid or 'en_us' in vid:
+                        selected_voice = voice
+                        break
+
+            if selected_voice:
+                self._engine.setProperty('voice', selected_voice.id)
 
             for sentence in self._sentences:
                 if self._stop_requested:
@@ -596,10 +1029,14 @@ class TTSExportWorker(QThread):
     finished = pyqtSignal(str)
     error = pyqtSignal(str)
 
-    def __init__(self, text: str, save_path: str):
+    def __init__(self, text: str, save_path: str,
+                 voice_gender: str = "female",
+                 ffmpeg_path: str = ""):
         super().__init__()
         self.text = text
         self.save_path = save_path
+        self._voice_gender = voice_gender
+        self._ffmpeg_path = ffmpeg_path
         self._is_cancelled = False
 
     def cancel(self):
@@ -622,7 +1059,7 @@ class TTSExportWorker(QThread):
                 return
 
             total_chunks = len(chunks)
-            tmp_path = Path("output_temp.mp3")
+            tmp_path = Path(tempfile.mktemp(suffix='.mp3', prefix='tts_export_'))
 
             if tmp_path.exists():
                 tmp_path.unlink()
@@ -635,13 +1072,39 @@ class TTSExportWorker(QThread):
                     tts = gTTS(text=chunk, lang="en", tld="us")
                     tts.write_to_fp(outfile)
 
-                    percent = int(((i + 1) / total_chunks) * 100)
+                    # Reserve last 10 % for pitch-shift step if male
+                    if self._voice_gender == "male":
+                        percent = int(((i + 1) / total_chunks) * 90)
+                    else:
+                        percent = int(((i + 1) / total_chunks) * 100)
                     self.progress.emit(percent)
 
             if self._is_cancelled:
                 if tmp_path.exists():
                     tmp_path.unlink()
                 return
+
+            # Apply pitch-shift for male voice
+            if self._voice_gender == "male" and self._ffmpeg_path:
+                shifted_path = Path(
+                    tempfile.mktemp(suffix='.mp3', prefix='tts_male_export_')
+                )
+                self.progress.emit(92)
+
+                if _pitch_shift_mp3(
+                    str(tmp_path), str(shifted_path), self._ffmpeg_path,
+                ):
+                    # Use the pitch-shifted version
+                    tmp_path.unlink(missing_ok=True)
+                    tmp_path = shifted_path
+                    self.progress.emit(98)
+                else:
+                    # Pitch-shift failed — export the unshifted version
+                    logger.warning(
+                        "Male pitch-shift failed during export, "
+                        "using default voice"
+                    )
+                    shifted_path.unlink(missing_ok=True)
 
             _shutil.copy(str(tmp_path), self.save_path)
             tmp_path.unlink(missing_ok=True)
